@@ -5,31 +5,61 @@ import 'package:sqflite/sqflite.dart';
 class DatabaseService {
   static const String _fileName = 'practice_tracker.db';
 
-  /// v2: sessions keyed by `exercise_id` (v1 used a free `type` column).
-  static const int _version = 2;
+  /// Schema history:
+  ///  v1 — free `type` column (pre-release, no real user data).
+  ///  v2 — sessions keyed by `exercise_id`.
+  ///  v3 — added CHECK constraints for row integrity.
+  static const int _version = 3;
 
   static const String sessionsTable = 'sessions';
 
-  Database? _db;
+  // Cache the *future*, not the resolved Database: two concurrent first calls
+  // must share one `_open()`, otherwise each opens its own connection.
+  Future<Database>? _dbFuture;
 
-  Future<Database> get database async => _db ??= await _open();
+  Future<Database> get database => _dbFuture ??= _open();
 
-  Future<Database> _open() async {
-    final path = join(await getDatabasesPath(), _fileName);
-    return openDatabase(
-      path,
-      version: _version,
-      onCreate: (db, version) => _createSchema(db),
-      onUpgrade: (db, oldVersion, newVersion) async {
-        // The v1 schema is incompatible and carried no real user data, so we
-        // rebuild rather than migrate rows.
-        await db.execute('DROP TABLE IF EXISTS $sessionsTable');
-        await _createSchema(db);
-      },
-    );
+  Future<Database> _open() {
+    return getDatabasesPath().then((dir) {
+      return openDatabase(
+        join(dir, _fileName),
+        version: _version,
+        onCreate: (db, version) => _createSchema(db),
+        onUpgrade: _onUpgrade,
+      );
+    });
   }
 
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    // Migrations run in order; each guarded by the version it introduces, so a
+    // future bump never re-runs (or worse, re-drops) an earlier step.
+    if (oldVersion < 2) {
+      // v1's schema is incompatible and carried no real user data, so we drop
+      // and recreate rather than migrate rows. Scoped to the v1→v2 hop only.
+      await db.execute('DROP TABLE IF EXISTS $sessionsTable');
+      await _createSchemaV2(db);
+    }
+    if (oldVersion < 3) {
+      await _migrateV2toV3(db);
+    }
+  }
+
+  /// Final (v3) schema, used for fresh installs.
   Future<void> _createSchema(Database db) {
+    return db.execute('''
+      CREATE TABLE $sessionsTable(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        exercise_id TEXT NOT NULL CHECK(length(exercise_id) > 0),
+        duration_seconds INTEGER NOT NULL CHECK(duration_seconds >= 0),
+        started_at INTEGER NOT NULL CHECK(started_at >= 0),
+        note TEXT NOT NULL DEFAULT ''
+      )
+    ''');
+  }
+
+  /// Historical v2 schema (no CHECK constraints) — kept so the v1→v2 migration
+  /// step reproduces exactly what shipped, before v3 layers constraints on top.
+  Future<void> _createSchemaV2(Database db) {
     return db.execute('''
       CREATE TABLE $sessionsTable(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -41,8 +71,36 @@ class DatabaseService {
     ''');
   }
 
+  /// Adds CHECK constraints without losing data: SQLite can't ALTER them in, so
+  /// rebuild via a constrained table and copy the (valid) existing rows over.
+  Future<void> _migrateV2toV3(Database db) async {
+    await db.transaction((txn) async {
+      await txn.execute('''
+        CREATE TABLE ${sessionsTable}_v3(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          exercise_id TEXT NOT NULL CHECK(length(exercise_id) > 0),
+          duration_seconds INTEGER NOT NULL CHECK(duration_seconds >= 0),
+          started_at INTEGER NOT NULL CHECK(started_at >= 0),
+          note TEXT NOT NULL DEFAULT ''
+        )
+      ''');
+      await txn.execute('''
+        INSERT INTO ${sessionsTable}_v3 (id, exercise_id, duration_seconds, started_at, note)
+        SELECT id, exercise_id, duration_seconds, started_at, note
+        FROM $sessionsTable
+        WHERE length(exercise_id) > 0 AND duration_seconds >= 0 AND started_at >= 0
+      ''');
+      await txn.execute('DROP TABLE $sessionsTable');
+      await txn.execute('ALTER TABLE ${sessionsTable}_v3 RENAME TO $sessionsTable');
+    });
+  }
+
   Future<void> close() async {
-    await _db?.close();
-    _db = null;
+    final future = _dbFuture;
+    _dbFuture = null;
+    if (future != null) {
+      final db = await future;
+      await db.close();
+    }
   }
 }

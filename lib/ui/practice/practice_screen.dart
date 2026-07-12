@@ -21,13 +21,15 @@ class PracticeScreen extends StatefulWidget {
   State<PracticeScreen> createState() => _PracticeScreenState();
 }
 
-class _PracticeScreenState extends State<PracticeScreen> {
+class _PracticeScreenState extends State<PracticeScreen>
+    with WidgetsBindingObserver {
   final TextEditingController _noteController = TextEditingController();
   bool _submitting = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // Default to the first exercise for the chosen instrument.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final timer = context.read<TimerViewModel>();
@@ -39,7 +41,23 @@ class _PracticeScreenState extends State<PracticeScreen> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!mounted) return;
+    final timer = context.read<TimerViewModel>();
+    // The UI thread is frozen while backgrounded, so the per-second ticker
+    // misses those seconds. Recompute from the wall clock on resume, and flush
+    // a recoverable draft on the way out.
+    if (state == AppLifecycleState.resumed) {
+      timer.refreshFromClock();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
+      timer.handleAppPaused();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _noteController.dispose();
     super.dispose();
   }
@@ -87,6 +105,7 @@ class _PracticeScreenState extends State<PracticeScreen> {
     final report = context.read<ReportViewModel>();
     final rewards = context.read<RewardsViewModel>();
     final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
     final exercise = timer.exercise;
 
     // Keep the button in its loading state for the whole operation so the
@@ -95,7 +114,16 @@ class _PracticeScreenState extends State<PracticeScreen> {
 
     final saved = await timer.save(_noteController.text);
     if (saved == null || exercise == null) {
-      if (mounted) setState(() => _submitting = false);
+      if (!mounted) return;
+      setState(() => _submitting = false);
+      // A save failure keeps the review state, so the user can just tap again.
+      if (timer.error != null) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text("Couldn't save this session — tap Save to retry."),
+          ),
+        );
+      }
       return;
     }
 
@@ -131,51 +159,71 @@ class _PracticeScreenState extends State<PracticeScreen> {
         title: const Text('Practice'),
         actions: const [BeatsPill()],
       ),
+      // Scroll instead of overflowing when vertical room is tight (open
+      // keyboard in the review state, short screens, landscape, large system
+      // text scale). With room to spare the content still spaces out evenly.
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (exercise != null)
-                _ExerciseCard(
-                  exercise: exercise,
-                  canChange: timer.status == TimerStatus.idle,
-                  onChange: _changeExercise,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: constraints.maxHeight - 48),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    if (exercise != null)
+                      _ExerciseCard(
+                        exercise: exercise,
+                        canChange: timer.status == TimerStatus.idle,
+                        onChange: _changeExercise,
+                      )
+                    else
+                      const SizedBox.shrink(),
+                    Column(
+                      children: [
+                        FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            timer.elapsed.clock,
+                            textAlign: TextAlign.center,
+                            style: theme.textTheme.displayLarge?.copyWith(
+                              fontFeatures: const [
+                                FontFeature.tabularFigures()
+                              ],
+                              fontWeight: FontWeight.w700,
+                              fontSize: 72,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          switch (timer.status) {
+                            TimerStatus.idle => 'Ready when you are',
+                            TimerStatus.running => 'Keep going 🔥',
+                            TimerStatus.review => timer.elapsed.inSeconds <= 600
+                                ? 'Are you serious? 🤨'
+                                : 'Nice — log it below',
+                          },
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.titleMedium
+                              ?.copyWith(color: Colors.white60),
+                        ),
+                      ],
+                    ),
+                    _Controls(
+                      timer: timer,
+                      noteController: _noteController,
+                      submitting: _submitting,
+                      onStop: _handleStop,
+                      onSave: _save,
+                    ),
+                  ],
                 ),
-              const Spacer(),
-              Text(
-                timer.elapsed.clock,
-                textAlign: TextAlign.center,
-                style: theme.textTheme.displayLarge?.copyWith(
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                  fontWeight: FontWeight.w700,
-                  fontSize: 72,
-                ),
               ),
-              const SizedBox(height: 4),
-              Text(
-                switch (timer.status) {
-                  TimerStatus.idle => 'Ready when you are',
-                  TimerStatus.running => 'Keep going 🔥',
-                  TimerStatus.review => timer.elapsed.inSeconds <= 600
-                      ? 'Are you serious? 🤨'
-                      : 'Nice — log it below',
-                },
-                textAlign: TextAlign.center,
-                style: theme.textTheme.titleMedium
-                    ?.copyWith(color: Colors.white60),
-              ),
-              const Spacer(),
-              _Controls(
-                timer: timer,
-                noteController: _noteController,
-                submitting: _submitting,
-                onStop: _handleStop,
-                onSave: _save,
-              ),
-            ],
-          ),
+            );
+          },
         ),
       ),
     );

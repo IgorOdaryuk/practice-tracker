@@ -42,6 +42,14 @@ class SqflitePracticeRepository implements PracticeRepository {
 
   @override
   Future<PracticeSession> addSession(PracticeSession session) async {
+    if (session.exerciseId.isEmpty) {
+      throw ArgumentError.value(
+          session.exerciseId, 'exerciseId', 'must not be empty');
+    }
+    if (session.durationSeconds < 0) {
+      throw ArgumentError.value(
+          session.durationSeconds, 'durationSeconds', 'must not be negative');
+    }
     final db = await _db.database;
     final id = await db.insert(DatabaseService.sessionsTable, session.toMap());
     return session.copyWith(id: id);

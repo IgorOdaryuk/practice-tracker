@@ -4,15 +4,24 @@ import 'package:flutter/foundation.dart';
 
 import '../data/practice_repository.dart';
 
-/// Aggregates the last 7 days of practice into per-exercise totals — the data
-/// behind the weekly report graph. Presentation (which exercises count as gaps)
-/// is left to the UI, which knows the chosen instrument's catalogue.
+/// Aggregates the current calendar week (Mon 00:00 → now, local time) of
+/// practice into per-exercise totals — the data behind the weekly report graph.
+/// Presentation (which exercises count as gaps) is left to the UI, which knows
+/// the chosen instrument's catalogue.
 class ReportViewModel extends ChangeNotifier {
-  ReportViewModel(this._repository) {
+  ReportViewModel(this._repository, {DateTime Function()? now})
+      : _now = now ?? DateTime.now {
     unawaited(load());
   }
 
   final PracticeRepository _repository;
+  final DateTime Function() _now;
+
+  /// Local midnight on the Monday of the week containing [from].
+  static DateTime startOfWeek(DateTime from) {
+    final midnight = DateTime(from.year, from.month, from.day);
+    return midnight.subtract(Duration(days: midnight.weekday - 1));
+  }
 
   bool _loading = false;
   Object? _error;
@@ -40,7 +49,7 @@ class ReportViewModel extends ChangeNotifier {
     _error = null;
     notifyListeners();
     try {
-      final since = DateTime.now().subtract(const Duration(days: 7));
+      final since = startOfWeek(_now());
       final sessions = await _repository.getSessionsSince(since);
       final totals = <String, int>{};
       for (final session in sessions) {

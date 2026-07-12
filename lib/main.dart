@@ -31,10 +31,16 @@ class PracticeTrackerApp extends StatelessWidget {
     super.key,
     required this.repository,
     required this.settings,
+    this.animateBackground = true,
   });
 
   final PracticeRepository repository;
   final SettingsService settings;
+
+  /// Off in widget tests so the always-on aurora ticker doesn't keep the tree
+  /// from settling. Production leaves it on (and it self-disables on the OS
+  /// "reduce motion" setting — see [GradientBackground]).
+  final bool animateBackground;
 
   @override
   Widget build(BuildContext context) {
@@ -42,7 +48,9 @@ class PracticeTrackerApp extends StatelessWidget {
       providers: [
         Provider<PracticeRepository>.value(value: repository),
         ChangeNotifierProvider(create: (_) => AppViewModel(settings)),
-        ChangeNotifierProvider(create: (_) => TimerViewModel(repository)),
+        ChangeNotifierProvider(
+          create: (_) => TimerViewModel(repository, settings: settings),
+        ),
         ChangeNotifierProvider(create: (_) => ReportViewModel(repository)),
         ChangeNotifierProvider(create: (_) => RewardsViewModel(repository)),
       ],
@@ -51,8 +59,10 @@ class PracticeTrackerApp extends StatelessWidget {
         debugShowCheckedModeBanner: false,
         theme: buildAppTheme(),
         themeMode: ThemeMode.dark,
-        builder: (context, child) =>
-            GradientBackground(child: child ?? const SizedBox.shrink()),
+        builder: (context, child) => GradientBackground(
+          animate: animateBackground,
+          child: child ?? const SizedBox.shrink(),
+        ),
         home: const _Root(),
       ),
     );
@@ -69,6 +79,29 @@ class _Root extends StatelessWidget {
     if (app.loading) {
       return const Scaffold(
         body: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (app.error != null) {
+      return Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  "Couldn't load your settings.",
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 16),
+                FilledButton(
+                  onPressed: () => context.read<AppViewModel>().load(),
+                  child: const Text('Retry'),
+                ),
+              ],
+            ),
+          ),
+        ),
       );
     }
     return app.onboarded ? const HomeScreen() : const OnboardingFlow();

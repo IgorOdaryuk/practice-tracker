@@ -14,9 +14,11 @@ class RewardsViewModel extends ChangeNotifier {
   final PracticeRepository _repository;
 
   bool _loading = false;
+  Object? _error;
   int _totalSeconds = 0;
 
   bool get loading => _loading;
+  Object? get error => _error;
   int get beats => beatsFromSeconds(_totalSeconds);
   Duration get totalTime => Duration(seconds: _totalSeconds);
 
@@ -38,9 +40,15 @@ class RewardsViewModel extends ChangeNotifier {
 
   Future<void> load() async {
     _loading = true;
+    _error = null;
     notifyListeners();
-    _totalSeconds = await _repository.getTotalSeconds();
-    _loading = false;
-    notifyListeners();
+    try {
+      _totalSeconds = await _repository.getTotalSeconds();
+    } catch (error) {
+      _error = error;
+    } finally {
+      _loading = false;
+      notifyListeners();
+    }
   }
 }

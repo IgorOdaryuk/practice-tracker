@@ -10,29 +10,70 @@ import 'package:flutter/scheduler.dart';
 /// Wired once via `MaterialApp.builder`. Only the painted layer repaints
 /// (Ticker → ValueNotifier); the UI ([child]) sits on top.
 class GradientBackground extends StatefulWidget {
-  const GradientBackground({super.key, required this.child});
+  const GradientBackground({
+    super.key,
+    required this.child,
+    this.animate = true,
+  });
 
   final Widget child;
+
+  /// Master switch for the motion. Off → a static painted backdrop. Kept off in
+  /// tests (so `pumpAndSettle` can settle) and forced off when the platform
+  /// requests reduced motion.
+  final bool animate;
 
   @override
   State<GradientBackground> createState() => _GradientBackgroundState();
 }
 
 class _GradientBackgroundState extends State<GradientBackground>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   final ValueNotifier<double> _time = ValueNotifier<double>(0);
   late final Ticker _ticker;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _ticker = createTicker((elapsed) {
       _time.value = elapsed.inMicroseconds / Duration.microsecondsPerSecond;
-    })..start();
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncTicker();
+  }
+
+  @override
+  void didUpdateWidget(GradientBackground oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.animate != widget.animate) _syncTicker();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // No point burning GPU on an aurora nobody can see; resume when we're back.
+    _syncTicker(resumed: state == AppLifecycleState.resumed);
+  }
+
+  bool get _reduceMotion =>
+      MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+
+  void _syncTicker({bool resumed = true}) {
+    final shouldRun = widget.animate && !_reduceMotion && resumed;
+    if (shouldRun && !_ticker.isActive) {
+      _ticker.start();
+    } else if (!shouldRun && _ticker.isActive) {
+      _ticker.stop();
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _ticker.dispose();
     _time.dispose();
     super.dispose();
@@ -43,7 +84,7 @@ class _GradientBackgroundState extends State<GradientBackground>
     return RepaintBoundary(
       child: CustomPaint(
         painter: _AuroraPainter(_time),
-        willChange: true,
+        willChange: widget.animate,
         child: widget.child,
       ),
     );
