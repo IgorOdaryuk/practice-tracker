@@ -15,9 +15,11 @@ void main() {
   late PracticeRepository repo;
 
   setUp(() async {
-    db = DatabaseService();
+    // Private in-memory DB per test: this suite exercises CRUD, not migrations,
+    // so it needs no on-disk file — and staying off the shared file removes the
+    // cross-suite lock contention that made this suite flaky.
+    db = DatabaseService(path: inMemoryDatabasePath);
     repo = SqflitePracticeRepository(db);
-    await repo.deleteAll();
   });
 
   tearDown(() async {

@@ -13,21 +13,30 @@ class DatabaseService {
 
   static const String sessionsTable = 'sessions';
 
+  /// Optional path override. Production leaves this null → the app's real file
+  /// under `getDatabasesPath()`. Tests pass their own path (a unique file or
+  /// `inMemoryDatabasePath`) so suites never contend on one shared on-disk DB.
+  final String? _pathOverride;
+
+  DatabaseService({String? path}) : _pathOverride = path;
+
   // Cache the *future*, not the resolved Database: two concurrent first calls
   // must share one `_open()`, otherwise each opens its own connection.
   Future<Database>? _dbFuture;
 
   Future<Database> get database => _dbFuture ??= _open();
 
-  Future<Database> _open() {
-    return getDatabasesPath().then((dir) {
-      return openDatabase(
-        join(dir, _fileName),
-        version: _version,
-        onCreate: (db, version) => _createSchema(db),
-        onUpgrade: _onUpgrade,
-      );
-    });
+  Future<Database> _open() async {
+    final path = _pathOverride ?? join(await getDatabasesPath(), _fileName);
+    return openDatabase(
+      path,
+      version: _version,
+      onCreate: (db, version) => _createSchema(db),
+      onUpgrade: _onUpgrade,
+      // App keeps sqflite's shared handle; an overridden path (tests) opens a
+      // private connection so parallel suites can't lock each other out.
+      singleInstance: _pathOverride == null,
+    );
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {

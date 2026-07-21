@@ -13,7 +13,9 @@ void main() {
   late String path;
 
   setUp(() async {
-    path = join(await sqflite.getDatabasesPath(), 'practice_tracker.db');
+    // A file unique to this suite (not the app's shared `practice_tracker.db`)
+    // so migration runs can't collide with the repository suite's connection.
+    path = join(await sqflite.getDatabasesPath(), 'migration_test.db');
     await sqflite.deleteDatabase(path);
   });
 
@@ -41,7 +43,7 @@ void main() {
     await legacy.close();
 
     // Open through the service → triggers the v2→v3 upgrade.
-    final service = DatabaseService();
+    final service = DatabaseService(path: path);
     addTearDown(service.close);
     final db = await service.database;
 
@@ -53,7 +55,7 @@ void main() {
   });
 
   test('the v3 schema rejects invalid rows via CHECK constraints', () async {
-    final service = DatabaseService();
+    final service = DatabaseService(path: path);
     addTearDown(service.close);
     final db = await service.database; // fresh install → v3 with constraints
 
